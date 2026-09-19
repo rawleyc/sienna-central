@@ -1,0 +1,4 @@
+'./IaC (SIEM)/.env'
+'./IaC (SIEM)/SSH_Keys/'
+'./IaC (SIEM)/.terraform/'
+'./IaC (SIEM)/terraform.tfvars'
