@@ -1,7 +1,0 @@
-locals {
-  SIEM_INSTANCE_TYPE  = "t4g.xlarge"
-  INSTANCE_NAME       = "SIEM_ELK"
-  SUBNET_NAME         = "SIEM_SUBNET"
-  SECURITY_GROUP_NAME = "SIENNA_SG"
-  KEY_PAIR_NAME = "SSH_KEY_NAME"
-}
