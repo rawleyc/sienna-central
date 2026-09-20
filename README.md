@@ -138,4 +138,4 @@ Rule export: `rules/bruteforce_4625.ndjson`
 
 ## Notes
 
-The brute-force script was drafted by AI and modified to increase the logon counts from 5 to 20 
+The brute-force script was drafted by AI and I modified it to increase the login attempts count from 5 to 20 
