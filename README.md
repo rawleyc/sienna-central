@@ -1,15 +1,35 @@
-Setting up a SIEM system.
-ELK sitting on AWS. < Provisioned instance using terraform (16GB 4vCPU ARM instance {ARM is cheaper})>
-Exported private key for SSH troubleshooting of user-data script.
-User Data script logging >> cloud-init log
-AMAZON AMI did not have linux did not have docker-compose (manually downloaded)
-So far created a user-data script to lanuch ELK using docker on ARM arch. 
-Used Nginx proxy to accept traffic on port 80 then redirect to 5601 on docker container
-Used terraform to create an A record in domain DNS and point it towards the EC2 SIEM instance
-Browser (443) > Cloudflare (80) > SIEM(EC2)
-Was getting constant Bad gateway errors, had to allow NGINX to make network connections using "setsebool -P httpd_can_network_connect 1"
-Setup ELK security (2 kibana users and password generated using openssl) stored in root
+ELK SIEM on AWS (Terraform)
 
-Setting up the DC using Windows Server 2025 Datacenter Core (less resource usage)
-Opened agent traffic to port 8220 via cloudflare (UNPROXIED)
-Unhealthy agents .... needed to create two outputs ... 1 for Fleet Server > localhost:9200 ... 2 For Agents > agents.vladron.dev:9200
+Elastic Stack SIEM deployed with Terraform on AWS, with a Windows Server 2025 Core domain controller reporting through Fleet.
+
+Architecture
+
+[diagram: Browser > Cloudflare (443) > Nginx (80) > Kibana (5601, Docker) on EC2; agents > Fleet Server (8220)]
+
+Components
+AWS EC2 ARM instance (16 GB, 4 vCPU; ARM chosen for cost), provisioned with Terraform
+ELK launched by a user-data script using Docker on ARM
+Nginx reverse proxy; DNS A record created by Terraform
+Windows Server 2025 Datacenter Core domain controller with Elastic Agents
+Deployment
+
+[terraform init / apply steps; what user-data does]
+
+Problems and fixes
+
+| Symptom | Cause | Fix |
+| Bad Gateway from Nginx | SELinux blocked proxy network connections | setsebool -P httpd_can_network_connect 1 |
+| Amazon AMI missing docker-compose | Not in the AMI | Installed manually in user-data |
+| Unhealthy Fleet agents | Single output | Two outputs: Fleet Server to localhost:9200, agents to [agent hostname]:9200 |
+
+Security decisions and known gaps
+
+[what's restricted, what isn't yet]
+
+Detection testing
+
+[link to the Caldera writeup, with detected and missed techniques]
+
+Cost and teardown
+
+[monthly cost estimate, how to destroy]
