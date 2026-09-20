@@ -4,3 +4,5 @@ variable "CLOUDFLARE_API_TOKEN" {
 }
 
 variable "CLOUDFLARE_ZONE_ID" {}
+
+variable "AGENTS_SUBDOMAIN" {}

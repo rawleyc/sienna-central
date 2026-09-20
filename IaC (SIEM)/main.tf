@@ -49,6 +49,26 @@ resource "aws_security_group" "main" {
     ]
   }
 
+  ingress {
+    description = "Allow Elastic Agent to connect to fleet server"
+    from_port = 8220
+    to_port = 8220
+    protocol = "tcp"
+    cidr_blocks = [
+      "${chomp(data.http.MY_IP.response_body)}/32"
+    ]
+  }
+
+  ingress {
+    description = "Recieve logs from AGENTS"
+    from_port = 9200
+    to_port = 9200
+    protocol = "tcp"
+    cidr_blocks = [
+      "${chomp(data.http.MY_IP.response_body)}/32"
+    ]
+  }
+
 
   ingress {
     description = "HTTP from Cloudflare"
@@ -113,4 +133,14 @@ resource "cloudflare_dns_record" "sienna-central" {
   ttl     = 1
   proxied = true
 
+}
+
+resource "cloudflare_dns_record" "agents" {
+  zone_id = var.CLOUDFLARE_ZONE_ID
+  name = var.AGENTS_SUBDOMAIN
+  type = "A"
+  content = aws_instance.main.public_ip
+  ttl = 1
+  proxied = false
+  
 }
