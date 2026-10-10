@@ -6,6 +6,11 @@ data "aws_ami" "main" {
     name   = "name"
     values = ["amzn*"]
   }
+
+  filter {
+    name = "architecture"
+    values = ["arm64"]
+  }
 }
 
 data "aws_vpc" "main" {

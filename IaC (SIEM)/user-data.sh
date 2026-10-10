@@ -480,7 +480,12 @@ EOF
 rm -f /etc/nginx/conf.d/default.conf
 
 # Allow Nginx to connect to Kibana
-setsebool -P httpd_can_network_connect 1
+if command -v getenforce >/dev/null 2>&1 &&
+   [ "$(getenforce)" != "Disabled" ]; then
+    setsebool -P httpd_can_network_connect 1
+else
+    echo "SELinux is disabled; skipping setsebool."
+fi
 
 # Validate Nginx configuration
 nginx -t
