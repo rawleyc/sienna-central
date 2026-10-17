@@ -161,5 +161,32 @@ resource "github_actions_secret" "ssh_key" {
   depends_on = [ tls_private_key.ssh_private_key ]
   repository = var.GITHUB_REPO_NAME
   secret_name = "SSH_KEY"
-  value = file("/SSH_Keys/sienna-central")
+  value = tls_private_key.ssh_private_key.private_key_openssh
+}
+
+resource "github_actions_secret" "kibana_api_key" {
+  repository = var.GITHUB_REPO_NAME
+  secret_name = "KIBANA_API_KEY"
+  value = elasticstack_elasticsearch_security_api_key.github_dac_key.encoded
+}
+
+resource "github_actions_secret" "aws__sienna_sg" {
+  repository = var.GITHUB_REPO_NAME
+  secret_name = "AWS_SECURITY_GROUP_ID"
+  value = aws_security_group.main.id
+}
+
+resource "elasticstack_elasticsearch_security_api_key" "github_dac_key" {
+  name = "github-dac-sync-token"
+  role_descriptors = jsonencode({
+    "dac_sync_policy" = {
+      cluster = ["manage_own_api_key"]
+      index = [
+        {
+          names = [".internal.alerts-security.alerts-*", ".alerts-security.alerts-*"]
+          privileges = ["all"]
+        }
+      ]
+    }
+  })
 }

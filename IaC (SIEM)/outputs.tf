@@ -10,3 +10,7 @@ output "AGENT_URL" {
 output "SIEM_IP" {
   value = aws_instance.main.public_ip
 }
+
+output "Elastic_Password" {
+  value = data.external.remote_elk_password.result["password"]
+}

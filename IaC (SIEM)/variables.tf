@@ -10,3 +10,7 @@ variable "AGENTS_SUBDOMAIN" {}
 variable "GITHUB_REPO_NAME" {
   type = string
 }
+
+variable "GITHUB_TOKEN" {
+  
+}
