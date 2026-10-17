@@ -220,7 +220,7 @@ services:
       - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=dV4On8vDyxE7qBhfDIQq9VY7WYqoGwIj
 
     ports:
-      - "127.0.0.1:5601:5601"
+      - "0.0.0.0:5601:5601"
 
     depends_on:
       - elasticsearch
