@@ -11,6 +11,11 @@ terraform {
     http = {
       source = "hashicorp/http"
     }
+
+    github = {
+      source = "integrations/github"
+      version = "~> 6.0"
+    }
   }
 }
 

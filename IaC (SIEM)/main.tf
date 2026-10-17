@@ -144,3 +144,22 @@ resource "cloudflare_dns_record" "agents" {
   proxied = false
   
 }
+
+resource "github_actions_secret" "ssh_host" {
+  repository = var.GITHUB_REPO_NAME
+  secret_name = "SSH_HOST"
+  value = aws_instance.main.public_ip
+}
+
+resource "github_actions_secret" "ssh_username" {
+  repository = var.GITHUB_REPO_NAME
+  secret_name = "SSH_USERNAME"
+  value = "ec2-user"
+}
+
+resource "github_actions_secret" "ssh_key" {
+  depends_on = [ tls_private_key.ssh_private_key ]
+  repository = var.GITHUB_REPO_NAME
+  secret_name = "SSH_KEY"
+  value = file("/SSH_Keys/sienna-central")
+}
