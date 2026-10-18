@@ -134,7 +134,8 @@ Rule export: `rules/bruteforce_4625.ndjson`
 ## Cost and teardown
 
 - The SIEM instance cost about $0.15 per hour, which is roughly $110 to $113 per month if left running. Actual bill was $2.21 for this lab.
-- Teardown: `terraform destroy`, then revoke the Cloudflare API token, then delete the local VMs. Check the AWS console for leftover volumes, snapshots and Elastic IPs.
+- Teardown: run `.\terraform-destroy.ps1` from `IaC (SIEM)`. The script revokes the Elasticsearch API key before removing its Terraform state entry, destroys the GitHub secret, and then runs the full Terraform destroy.
+- For non-interactive teardown, use `.\terraform-destroy.ps1 -AutoApprove`. Revoke the Cloudflare API token separately, then delete the local VMs. Check the AWS console for leftover volumes, snapshots and Elastic IPs.
 
 ## Notes
 

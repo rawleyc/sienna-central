@@ -185,7 +185,7 @@ resource "elasticstack_elasticsearch_security_api_key" "github_dac_key" {
       applications = [
         {
           application = "kibana-.kibana"
-          privileges  = ["feature_securitySolution.all"]
+          privileges  = ["feature_securitySolutionRulesV4.all"]
           resources   = ["space:default"]
         }
       ]
