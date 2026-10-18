@@ -1,142 +1,201 @@
-# ELK SIEM on AWS (Terraform)
+# ELK SIEM on AWS with Terraform
 
-Elastic Stack SIEM deployed on AWS with Terraform, with a Windows Server 2025 Core domain controller sending logs through Fleet-managed Elastic Agents. One custom detection rule (brute-force logons) was written and tested.
+Sienna Central is a small Elastic SIEM lab.
 
-**Status:** Torn down after testing. Rebuild with `terraform apply`.
+It was built to practise:
 
-**Scope:** Lab environment. Not hardened for production. Known gaps are listed below.
+- Terraform and AWS infrastructure.
+- Windows log collection with Elastic Agents.
+- Detection engineering.
+- MITRE Caldera threat emulation.
+- Detection as code.
+
+**Status:** The lab was used for testing and can be rebuilt with Terraform.
+
+**Scope:** This is a learning lab, not a production-ready SIEM.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    analyst["Analyst browser"] -->|"HTTPS 443"| cf["Cloudflare<br/>(proxied)"]
-    cf -->|"HTTP 80"| nginx
+    analyst["Analyst"] -->|"HTTPS"| cloudflare["Cloudflare"]
+    cloudflare -->|"HTTP"| nginx["Nginx"]
 
-    subgraph aws["AWS: EC2 ARM instance (provisioned with Terraform)"]
-        nginx["Nginx<br/>reverse proxy"] -->|"5601"| kibana["Kibana<br/>(Docker)"]
-        kibana --> es["Elasticsearch<br/>(Docker)"]
-        fleet["Fleet Server<br/>(Docker)"] -->|"9200"| es
+    subgraph aws["AWS"]
+        nginx --> kibana["Kibana"]
+        kibana --> elasticsearch["Elasticsearch"]
+        fleet["Fleet Server"] --> elasticsearch
     end
 
-    subgraph local["Local: VMware NAT network"]
-        dc["DC<br/>Windows Server 2025 Core<br/>Elastic Agent"]
-        client["Client01<br/>Windows<br/>Elastic Agent"]
+    subgraph local["Local lab machines"]
+        windows["Windows domain controller"]
+        client["Windows client"]
+        caldera["Debian with MITRE Caldera"]
     end
 
-    dns["Cloudflare DNS<br/>(DNS-only record)"]
-
-    dc -->|"enroll 8220 / logs 9200"| dns
-    client -->|"enroll 8220 / logs 9200"| dns
-    dns --> fleet
-    dns --> es
+    windows -->|"Elastic Agent"| fleet
+    client -->|"Elastic Agent"| fleet
+    caldera -->|"Threat emulation"| windows
 ```
-
-- Analyst browser > Cloudflare (443) > Nginx (80) > Kibana (5601, Docker) on an EC2 instance
-- Elastic Agents on the Windows domain controller > Fleet Server (8220) > Elasticsearch (9200)
-- DNS records created by Terraform
-- Domain controller and Windows client are running locally with VMs.
 
 ## Components
 
-| Component | Detail |
+| Component | Purpose |
 |---|---|
-| SIEM host | AWS EC2, ARM instance, 16 GB RAM, 4 vCPU (ARM chosen for cost) (t4g.xlarge) |
-| Stack | Elasticsearch, Kibana, Fleet Server, run with Docker on ARM via a user-data script (v9.5.4) |
-| Reverse proxy | Nginx, forwards port 80 to Kibana on 5601, behind Cloudflare |
-| DNS | A record created with Terraform |
-| Endpoint | Windows Server 2025 Datacenter Core domain controller with Elastic Agent |
-| Attack simulation host | Debian instance with MITRE Caldera installed (not yet used, see Next steps) |
+| AWS EC2 | Runs the Elastic Stack |
+| Elasticsearch | Stores events and alerts |
+| Kibana | Shows logs, rules, and alerts |
+| Fleet Server | Manages the Elastic Agents |
+| Windows machines | Generate security events |
+| MITRE Caldera | Emulates attacker behaviour |
+| Terraform | Builds the AWS infrastructure |
+| GitHub Actions | Sends rules to Kibana |
 
-## Deployment
+The Elastic Stack runs in Docker on an ARM EC2 instance. Kibana is version
+9.5.4.
 
-1. `terraform init` and `terraform apply` provision the EC2 instance, security groups and DNS record. Variables are hard-coded :( in `terraform.tfvars`
-2. The user-data script installs Docker and docker-compose, then starts the Elastic Stack. Output is logged to the cloud-init log.
-3. Nginx is configured as a reverse proxy to Kibana (see Problems and fixes for the SELinux setting).
-4. Two Kibana users were created with generated passwords. Credentials are not stored in this repo.
-5. Fleet Server is reachable on port 8220 (Cloudflare record set to DNS-only, not proxied).
-6. Fleet has two outputs: one for the Fleet Server (`localhost:9200`) and one for agents (`agents.<your-domain>:9200`).
-7. The domain controller was set up on Windows Server 2025 Core, a Windows client was joined to the domain, and Elastic Agents were enrolled. Agents were enrolled using powershell command from the SIEM with the enrollment token
-8. The brute-force detection rule was created in Kibana (see Detection).
+## The Caldera exercise
 
-## Detection: brute-force logons
+The lab was tested before the detection-as-code repository was created.
+Caldera acted like a small attacker and ran seven abilities against a Windows
+machine:
+
+1. Domain account discovery.
+2. Winlogon registry modification.
+3. UAC bypass.
+4. PowerKatz.
+5. Clipboard copying.
+6. PSTools download and installation.
+7. Mimikatz.
+
+Five of the seven abilities succeeded.
+
+The SIEM created 132 open alerts. These alerts helped us create detections for:
+
+- Encoded PowerShell commands.
+- User enumeration.
+- Registry changes.
+- Credential dumping.
+- PSTools downloads.
+- Brute-force logons.
+
+## Detection as code
+
+The rules are stored in the separate
+[`rawleyc/sienna-rules`](https://github.com/rawleyc/sienna-rules) repository.
+
+Rules can be stored as YAML files or NDJSON exports from Kibana.
+
+When a rule change is pushed to `main`, GitHub Actions:
+
+1. Finds the YAML and NDJSON files.
+2. Reads the rule objects.
+3. Waits for Kibana to become ready.
+4. Sends the rules to the Detection Engine API.
+
+The API key used by the workflow needs the Kibana application privilege:
+
+```text
+feature_securitySolutionRulesV4.all
+```
+
+This is the privilege that allows the workflow to manage Security Solution
+rules and exceptions.
+
+## Detection example: brute-force logons
 
 | Field | Value |
 |---|---|
 | Rule type | Threshold |
-| Data source | Windows Security event 4625 (failed logon) from Elastic Agent |
-| Logic | 10 or more 4625 events per `host.name` within 5 minutes |
-| ATT&CK | T1110 Brute Force |
-| Rule schedule | 5m interval with 1m additional look-back |
-| Test | PowerShell script, 20 failed logon attempts, one per second |
-| Test started | 17:54:55 (from the event logs) |
-| Alert timestamp | 17:59:04 |
-| Alert delay | About 4 minutes 9 seconds |
+| Event | Windows Security event 4625 |
+| Logic | 10 or more failed logons per host within 5 minutes |
+| ATT&CK technique | T1110: Brute Force |
+| Schedule | Every 5 minutes, with a 1-minute look-back |
+| Test | 20 failed logon attempts |
 
-The delay is expected: detection rules run on a schedule, and events also take time to be shipped and indexed. Shorten the interval to reduce delay, and set the look-back longer than the interval so events are not missed between runs.
+The rule waited about four minutes before creating an alert. This was expected:
+events needed time to arrive, and the rule ran on a schedule.
 
-Test script (lab only, run on the domain controller; set the variables first):
+The rule groups by `host.name`, so it measures failed logons per machine. A
+production rule should also consider the account, source IP, and logon type.
+
+## Deployment
+
+The infrastructure is in [`IaC (SIEM)/`](./IaC%20(SIEM)/).
 
 ```powershell
-$user = "[test account]"
-$badPassword = "[wrong password]"
-
-1..20 | ForEach-Object {
-    $cred = New-Object System.Management.Automation.PSCredential(
-        $user,
-        (ConvertTo-SecureString $badPassword -AsPlainText -Force)
-    )
-
-    try {
-        Start-Process powershell.exe -Credential $cred -ArgumentList '-NoProfile -Command "exit"' -ErrorAction Stop
-    }
-    catch {
-        Write-Host "Attempt $_ failed as expected."
-    }
-
-    Start-Sleep -Seconds 1
-}
+terraform init
+terraform plan
+terraform apply
 ```
 
-Limitations:
-- The rule groups by `host.name` only. It measures failed logon volume per machine, not per account or source.
-- The test uses a local logon, so there is no source IP. A real network brute force would show a source IP and a different logon type.
-- Tuning ideas: group by target account and source IP for network logons, and exclude service accounts with stale credentials.
+Terraform creates the EC2 host, security group, DNS records, and GitHub Actions
+secrets needed by the rules repository.
 
-Rule export: `rules/bruteforce_4625.ndjson`
+## Difficulties we faced
 
-## Problems and fixes
+### Kibana was only listening locally
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Bad Gateway from Nginx | SELinux blocked Nginx from making network connections | `setsebool -P httpd_can_network_connect 1` |
-| docker-compose missing | Not included in the Amazon AMI | Installed manually in the user-data script |
-| Unhealthy Fleet agents | Only one output configured | Two outputs: Fleet Server to `localhost:9200`, agents to `agents.<your-domain>:9200` |
-| Atomic Red Team failed with exit code 2 | cause not found | Used the PowerShell script above to generate the events |
-| Alert appeared minutes after the test | Rule schedule and ingestion delay | Measured and documented above |
+Kibana was running, but Docker published port `5601` only on
+`127.0.0.1`. GitHub could not reach it.
+
+We changed the binding to `0.0.0.0:5601` and added a workflow health check.
+
+### The Kibana API had changed
+
+The old bulk endpoint returned `404 Not Found` on Kibana 9.5.4. The sync script
+now uses the supported Detection Engine endpoint and sends rules one at a time.
+
+### The API key could log in but could not create rules
+
+Elasticsearch index permissions were not enough. Kibana also needed the
+Security Solution application privilege:
+
+```text
+feature_securitySolutionRulesV4.all
+```
+
+### Terraform planned to replace the EC2 host
+
+The security group was attached with an old Terraform argument. Terraform
+thought the whole server needed replacement. We changed it to
+`vpc_security_group_ids`, so the existing host could stay in place.
+
+### The public IP changed
+
+When the EC2 host was rebuilt, its public IP changed. GitHub Actions then tried
+to use the old address. Terraform updates the GitHub secret, but the workflow
+must be run again after the update.
 
 ## Security decisions and known gaps
 
-| Exposure | State in this lab | Production approach |
+| Area | Lab setup | Safer production approach |
 |---|---|---|
-| Kibana | Cloudflare (443) > Nginx (80), only allowed traffic from cloudflare IPs | Same |
-| Fleet Server (8220) | Cloudflare DNS-only record, restricted to my IP | Restrict by security group, TLS |
-| Elasticsearch (9200) | Restricted to my IP | Private networking or VPN, TLS, no public exposure |
-| Credentials | Generated with openssl, not committed | Secrets manager |
-| SSH key | Exported for troubleshooting the user-data script | Remove or use a managed access method after setup |
+| Kibana | Cloudflare and Nginx in front of Kibana | Private access or a protected VPN |
+| Elasticsearch | Publicly reachable during testing | Private networking |
+| Credentials | Generated for the lab | Use a secrets manager |
+| API key | Stored as a GitHub Actions secret | Use short-lived or tightly scoped credentials |
+| SSH | Key used for troubleshooting | Use managed access and rotate keys |
+| Terraform state | Local state during development | Use an encrypted remote backend |
 
-## Next steps
-
-- Run MITRE Caldera from the Debian instance against the domain controller and record which techniques are detected and which are missed.
-- Add more rules, including Active Directory techniques, mapped to ATT&CK.
-- Manage the Windows side and the rules as code.
+Do not commit `terraform.tfstate`, private keys, API keys, or passwords.
 
 ## Cost and teardown
 
-- The SIEM instance cost about $0.15 per hour, which is roughly $110 to $113 per month if left running. Actual bill was $2.21 for this lab.
-- Teardown: run `.\terraform-destroy.ps1` from `IaC (SIEM)`. The script revokes the Elasticsearch API key before removing its Terraform state entry, destroys the GitHub secret, and then runs the full Terraform destroy.
-- For non-interactive teardown, use `.\terraform-destroy.ps1 -AutoApprove`. Revoke the Cloudflare API token separately, then delete the local VMs. Check the AWS console for leftover volumes, snapshots and Elastic IPs.
+The EC2 instance cost about $0.15 per hour while running. The lab cost about
+$2.21 during testing.
 
-## Notes
+To remove the infrastructure:
 
-The brute-force script was drafted by AI and I modified it to increase the login attempts count from 5 to 20 
+```powershell
+.\terraform-destroy.ps1
+```
+
+For automatic approval:
+
+```powershell
+.\terraform-destroy.ps1 -AutoApprove
+```
+
+After teardown, check AWS, Cloudflare, GitHub Actions secrets, and the local
+virtual machines for anything that should also be removed.
