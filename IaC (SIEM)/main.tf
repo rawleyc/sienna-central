@@ -111,7 +111,7 @@ resource "aws_instance" "main" {
   user_data                   = file("${path.module}/user-data.sh")
   user_data_replace_on_change = true
   key_name = aws_key_pair.key_pair.key_name
-  security_groups = [aws_security_group.main.id]
+  vpc_security_group_ids = [aws_security_group.main.id]
 
   root_block_device {
     volume_size = 50
@@ -177,10 +177,18 @@ resource "github_actions_secret" "aws__sienna_sg" {
 }
 
 resource "elasticstack_elasticsearch_security_api_key" "github_dac_key" {
+  provider = elasticstack
   name = "github-dac-sync-token"
   role_descriptors = jsonencode({
     "dac_sync_policy" = {
       cluster = ["manage_own_api_key"]
+      applications = [
+        {
+          application = "kibana-.kibana"
+          privileges  = ["feature_securitySolution.all"]
+          resources   = ["space:default"]
+        }
+      ]
       index = [
         {
           names = [".internal.alerts-security.alerts-*", ".alerts-security.alerts-*"]
