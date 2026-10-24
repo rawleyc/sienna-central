@@ -1,0 +1,360 @@
+---
+- name: Install SIEM
+  hosts: elk_siem
+  become: true
+
+  tasks: 
+    - name: Update system packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+
+    - name: Install Docker
+      ansible.builtin.dnf:
+      name: Docker
+      state: present
+
+    - name: Install Nginx
+      ansible.builtin.dnf:
+      name: Nginx
+      state: present
+
+    - name: Enable and start Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+
+    - name: Configure elasticsearch...
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-sienna-elasticsearch.conf
+        content: |
+          vm.max_map_count=262144
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Create SIENNA CENTRAL directory structure
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /opt/sienna-central
+        - /opt/sienna-central/logstash/pipeline
+        - /opt/sienna-central/elasticsearch/data
+
+    - name: Generate ELK credentials...
+      ansible.builtin.set_fact:
+        ELASTIC_PASSWORD: "{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}"
+        KIBANA_SYSTEM_PASSWORD: "{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}" 
+
+      ansible.builtin.copy:
+        dest: /root/sienna-central-credentials.txt
+        content: |
+          SIENNA CENTRAL CREDENTIALS
+          ==========================
+
+          Elastic user:
+          Username: elastic
+          Password: "{{ ELASTIC_PASSWORD }}""
+
+          Kibana system user:
+          Username: kibana_system
+          Password: "{{ KIBANA_SYSTEM_PASSWORD }}""
+
+        owner: root
+        group: root
+        mode: "0644"
+
+
+    - name: Pull ELK images
+      community.docker.docker_image:
+        name: "{{ item }}"
+        source: pull
+      loop:
+        - elasticsearch:9.5.4
+        - logstash:9.5.4
+        - kibana:9.5.4
+
+
+    - name: Create Docker Compose configuration
+      ansible.builtin.copy:
+        dest: /opt/sienna-central/docker-compose.yml
+        content: |
+          services:
+            # ==========================================================
+            # ELASTICSEARCH
+            # ==========================================================
+
+            elasticsearch:
+
+              image: docker.elastic.co/elasticsearch/elasticsearch:9.5.4
+
+              container_name: sienna-elasticsearch
+
+              restart: unless-stopped
+
+              environment:
+                - discovery.type=single-node
+                - xpack.security.enabled=true
+
+                # Initial password for the built-in elastic user
+                - ELASTIC_PASSWORD="{{ ELASTIC_PASSWORD }}""
+
+                # 6 GB Elasticsearch JVM heap
+                - ES_JAVA_OPTS=-Xms6g -Xmx6g
+
+              volumes:
+                - elasticsearch-data:/usr/share/elasticsearch/data
+
+              ports:
+                - "9200:9200"
+
+              networks:
+                - sienna
+
+              mem_limit: 8g
+
+
+            # ==========================================================
+            # LOGSTASH
+            # ==========================================================
+
+            logstash:
+
+              image: docker.elastic.co/logstash/logstash:9.5.4
+
+              container_name: sienna-logstash
+
+              restart: unless-stopped
+
+              environment:
+
+                # 2 GB Logstash JVM heap
+                - LS_JAVA_OPTS=-Xms2g -Xmx2g
+
+                # Password used by Logstash to authenticate to Elasticsearch
+                - ELASTIC_PASSWORD="{{ ELASTIC_PASSWORD }}""
+
+              volumes:
+                - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+
+              ports:
+                - "5044:5044"
+                - "5000:5000"
+
+              depends_on:
+                - elasticsearch
+
+              networks:
+                - sienna
+
+              mem_limit: 3g
+
+
+            # ==========================================================
+            # KIBANA
+            # ==========================================================
+
+            kibana:
+
+              image: docker.elastic.co/kibana/kibana:9.5.4
+
+              container_name: sienna-kibana
+
+              restart: unless-stopped
+
+              environment:
+
+                - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+                - ELASTICSEARCH_USERNAME=kibana_system
+                - ELASTICSEARCH_PASSWORD="{{ KIBANA_SYSTEM_PASSWORD }}""
+
+                - XPACK_SECURITY_ENCRYPTIONKEY=srCFWMjkGBRqTFkVhovjVgvNcTHJ1ch4
+                - XPACK_REPORTING_ENCRYPTIONKEY=1HVyNaReKIdyLXbTLWuWfbWAZHIhgjGu
+                - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=dV4On8vDyxE7qBhfDIQq9VY7WYqoGwIj
+
+              ports:
+                - "0.0.0.0:5601:5601"
+
+              depends_on:
+                - elasticsearch
+
+              networks:
+                - sienna
+
+              mem_limit: 2g
+
+
+          # ============================================================
+          # NETWORK
+          # ============================================================
+
+          networks:
+
+            sienna:
+
+              driver: bridge
+
+
+          # ============================================================
+          # PERSISTENT STORAGE
+          # ============================================================
+
+          volumes:
+
+            elasticsearch-data:
+
+    - name: Create Logstash pipeline
+      ansible.builtin.copy:
+        dest:  /opt/sienna-central/logstash/pipeline/logstash.conf
+        content: |          
+          input {
+
+            # Filebeat / Beats agents
+            beats {
+              port => 5044
+            }
+
+            # JSON events sent over TCP
+            tcp {
+              port => 5000
+              codec => json
+            }
+
+          }
+
+
+          filter {
+
+            # ----------------------------------------------------------
+            # Detection / parsing rules will go here
+            # ----------------------------------------------------------
+
+          }
+
+
+          output {
+
+            # Debug output
+            stdout {
+              codec => rubydebug
+            }
+
+            # Send events to Elasticsearch
+            elasticsearch {
+
+              hosts => [
+                "http://elasticsearch:9200"
+              ]
+
+              user => "elastic"
+              password => "${ELASTIC_PASSWORD}"
+
+              index => "sienna-central-%{+YYYY.MM.dd}"
+
+            }
+
+          }
+        owner: root 
+        group: root
+        mode: "0644"
+
+    - name: Start SIENNA CENTRAL
+      ansible.builtin.command: cd /opt/sienna-central && docker-compose up -d
+
+    - name: Wait for Elasticsearch to be up
+      ansible.builtin.uri:
+        url: http://localhost:9200
+        method: GET 
+        user: elastic
+        password: "{{ ELASTIC_PASSWORD }}"
+        force_basic_auth: true
+        status_code: 200
+      register: es_health
+      until: es_health.status == 200
+      retries: 60
+      delay: 5
+      no_log: true
+
+    - name: Waiting for Elasticsearch security API...
+      ansible.builtin.uri:
+        url: http://localhost:9200/_security/user/kibana_system
+        method: GET 
+        user: elastic
+        password: "{{ ELASTIC_PASSWORD }}"
+        force_basic_auth: true
+        status_code: 200
+      register: es_health
+      until: es_health.status == 200
+      retries: 60
+      delay: 5
+      no_log: true
+
+    - name: Configure Kibana password
+      ansible.builtin.uri:
+        url: "http://localhost:9200/_security/user/kibana_system/_password"
+        method: POST 
+        user: elastic
+        password: "{{ ELASTIC_PASSWORD }}"
+        force_basic_auth: true
+        headers:
+          Content-Type: application/json
+        body_format: json
+        body:
+          password: "{{ KIBANA_SYSTEM_PASSWORD }}"
+        status_code: 200
+      no_log: true
+
+    - name: Restart SIENNA CENTRAL with new credentials
+      ansible.builtin.command: cd /opt/sienna-central && docker-compose up -d
+
+    - name: Configure Nginx
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/sienna.conf
+        content: 
+          server {
+            listen 80;
+            server_name sienna-central.valdron.dev;
+
+            location / {
+                proxy_pass http://127.0.0.1:5601;
+
+                proxy_http_version 1.1;
+
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+            }
+          }
+
+      ansible.builtin.command: rm -f /etc/nginx/conf.d/default.conf && nginx -t
+
+
+    - name: Check SELinux status
+      ansible.builtin.command: getenforce
+      register: selinux_status
+      changed_when: false
+      failed_when: false
+
+    - name: Allow HHTP services to make network connections
+      ansible.posix.seboolean:
+        name: httpd_can_connect_network
+        state: true
+        persistent: true
+      when: 
+        - selinux_status.rc == 0
+        - selinux_status.stdout != "Disabled"
+
+
+
+
