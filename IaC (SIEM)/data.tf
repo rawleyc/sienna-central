@@ -23,72 +23,82 @@ data "http" "MY_IP" {
 
 
 data "external" "remote_elk_password" {
-  program = ["powershell", "-Command", <<EOF
-    $ip = "${aws_instance.main.public_ip}"
-    $keyPath = "C:\Users\chiru\OneDrive\Documents\Programming Projects\sienna-central\IaC (SIEM)\SSH_Keys\sienna-central"
-    
-    # 1. Retry loop to wait until the SSH port (22) is open and credentials file is accessible
-    $maxAttempts = 15
-    $attempt = 1
-    $connected = $false
-    $file_content = ""
+  program = ["bash", "-c", <<EOF
+    set -u
 
-    while (-not $connected -and $attempt -le $maxAttempts) {
-        try {
-            $file_content = (ssh -i $keyPath -o ConnectTimeout=5 -o StrictHostKeyChecking=no ec2-user@$ip "sudo cat /root/sienna-central-credentials.txt" 2>$null | Out-String).Trim()
-            if ($file_content) {
-                $connected = $true
-            } else {
-                throw "Empty response"
-            }
-        } catch {
-            Start-Sleep -Seconds 5
-            $attempt++
-        }
-    }
+    ip="${aws_instance.main.public_ip}"
+    key_path="${path.module}/SSH_Keys/sienna-central"
+    max_attempts=15
+    attempt=1
+    file_content=""
 
-    if (-not $connected) {
-        Write-Error "Timed out waiting for SSH daemon or credentials file to become available on the EC2 instance."
-        exit 1
-    }
-    
-    # 2. Advanced Regex matching for your specific file structure
-    if ($file_content -match '(?s)Elastic user:.*?Password:\s*([^\s\r\n]+)') {
-        $elastic_pass = $Matches[1]
-    } else {
-        Write-Error "Could not parse Elastic password from the file structure."
-        exit 1
-    }
+    # Wait until SSH is available and the credentials file can be read.
+    while [ "$${attempt}" -le "$${max_attempts}" ]; do
+      file_content="$(ssh -i "$${key_path}" \
+        -o ConnectTimeout=5 \
+        -o StrictHostKeyChecking=no \
+        "ec2-user@$${ip}" \
+        "sudo cat /root/sienna-central-credentials.txt" 2>/dev/null || true)"
 
-    # 3. Wait until the Elasticsearch Docker container wakes up and begins routing requests on port 9200
-    $containerReady = $false
-    $dockerAttempts = 60  # 60 attempts * 5 seconds = Up to 5 minutes for Docker and Elasticsearch startup
-    $dAttempt = 1
+      if [ -n "$${file_content}" ]; then
+        break
+      fi
 
-    while (-not $containerReady -and $dAttempt -le $dockerAttempts) {
-        try {
-            # Execute a curl check locally inside the EC2 server via SSH.
-            $response = (ssh -i $keyPath -o StrictHostKeyChecking=no ec2-user@$ip "curl -s -o /dev/null -w '%%{http_code}' http://localhost:9200" 2>$null | Out-String).Trim()
+      sleep 5
+      attempt=$((attempt + 1))
+    done
 
-            # Accepts 200 (Healthy), 401 (Auth Alive), or 301/302 (Redirects) as ready metrics
-            if ($response -match '^(200|301|302|401)$') {
-                $containerReady = $true
-            } else {
-                throw "Container initializing"
-            }
-        } catch {
-            Start-Sleep -Seconds 5
-            $dAttempt++
-        }
-    }
+    if [ -z "$${file_content}" ]; then
+      echo "Timed out waiting for SSH daemon or credentials file to become available on the EC2 instance." >&2
+      exit 1
+    fi
 
-    if (-not $containerReady) {
-        Write-Error "Timed out waiting for Elasticsearch Docker container to bind to port 9200."
-        exit 1
-    }
-    
-    # 4. Output as clean compressed JSON format back to Terraform
-    @{ password = $elastic_pass } | ConvertTo-Json -Compress
+    # Extract the first non-whitespace value following "Password:".
+    elastic_pass="$(printf '%s\n' "$${file_content}" | awk '
+      /Elastic user:/ { in_elastic_block = 1 }
+      in_elastic_block && /Password:/ {
+        sub(/^.*Password:[[:space:]]*/, "")
+        print $1
+        exit
+      }
+    ')"
+
+    if [ -z "$${elastic_pass}" ]; then
+      echo "Could not parse Elastic password from the credentials file." >&2
+      exit 1
+    fi
+
+    # Wait until Elasticsearch responds on port 9200.
+    container_ready=false
+    docker_attempts=60
+    docker_attempt=1
+
+    while [ "$${docker_attempt}" -le "$${docker_attempts}" ]; do
+      response="$(ssh -i "$${key_path}" \
+        -o ConnectTimeout=5 \
+        -o StrictHostKeyChecking=no \
+        "ec2-user@$${ip}" \
+        "curl -s -o /dev/null -w '%%{http_code}' http://localhost:9200" 2>/dev/null || true)"
+
+      case "$${response}" in
+        200|301|302|401)
+          container_ready=true
+          break
+          ;;
+      esac
+
+      sleep 5
+      docker_attempt=$((docker_attempt + 1))
+    done
+
+    if [ "$${container_ready}" != true ]; then
+      echo "Timed out waiting for Elasticsearch Docker container to bind to port 9200." >&2
+      exit 1
+    fi
+
+    # The generated password is a non-whitespace token, so it is safe to quote
+    # directly in the JSON response expected by the external data source.
+    printf '{"password":"%s"}\n' "$${elastic_pass}"
 EOF
   ]
 
